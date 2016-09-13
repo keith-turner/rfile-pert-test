@@ -17,5 +17,5 @@ case $TEST in
     ;;
 esac
 
-mvn -q clean compile exec:java -Daccumulo.version=$ACCUMULO_VER -Dexec.mainClass=$CLASS -Dexec.args="${@:3}"
+mvn -q clean compile exec:java -Daccumulo.version=$ACCUMULO_VER -Dexec.mainClass=$CLASS -Dexec.args="${*:3}"
 

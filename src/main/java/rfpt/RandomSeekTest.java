@@ -5,6 +5,8 @@ import java.util.Collections;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
 
+import com.beust.jcommander.JCommander;
+import com.beust.jcommander.Parameter;
 import com.google.common.base.Stopwatch;
 import org.apache.accumulo.core.conf.AccumuloConfiguration;
 import org.apache.accumulo.core.data.Key;
@@ -18,6 +20,7 @@ import org.apache.accumulo.core.file.rfile.RFile;
 import org.apache.accumulo.core.file.rfile.RFile.Reader;
 import org.apache.accumulo.core.file.rfile.RFileOperations;
 import org.apache.accumulo.core.util.FastFormat;
+import org.apache.commons.math.stat.descriptive.DescriptiveStatistics;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -31,18 +34,19 @@ public class RandomSeekTest {
   private static final int NUM_ROWS = 100_000;
   private static final int NUM_COLS = 100;
 
+  public static class Options {
+    @Parameter(names = {"-i", "--iterations"}, description = "Iterations to run test")
+    public int iterations = 100;
+
+    @Parameter(names = {"--noCache"}, description = "Disable cache")
+    public boolean noCache = false;
+  }
+
   public static void main(String[] args) throws Exception {
 
-    int iterations;
+    Options opts = new Options();
+    new JCommander(opts, args);
 
-    if (args.length == 0) {
-      iterations = 100;
-    } else if (args.length == 1) {
-      iterations = Integer.parseInt(args[0]);
-    } else {
-      System.out.println("Usage " + RandomSeekTest.class.getName() + " [iterations]");
-      return;
-    }
 
     Configuration conf = new Configuration();
     FileSystem fs = FileSystem.getLocal(conf);
@@ -53,27 +57,39 @@ public class RandomSeekTest {
       write(conf, fs, acuconf, file);
     }
 
-    LruBlockCache indexCache = new LruBlockCache(1000000, 100000);
-    LruBlockCache dataCache = new LruBlockCache(500000000, 100000);
+    LruBlockCache indexCache = null;
+    LruBlockCache dataCache = null;
 
-    for (int i = 0; i < iterations; i++) {
-      randomseeks(conf, fs, acuconf, file, dataCache, indexCache);
+    if (!opts.noCache) {
+      indexCache = new LruBlockCache(1000000, 100000);
+      dataCache = new LruBlockCache(500000000, 100000);
     }
 
-    print(indexCache.getStats());
-    print(dataCache.getStats());
+    DescriptiveStatistics stats = new DescriptiveStatistics();
 
-    indexCache.shutdown();
-    dataCache.shutdown();
+    for (int i = 0; i < opts.iterations; i++) {
+      stats.addValue(randomseeks(conf, fs, acuconf, file, dataCache, indexCache));
+    }
+
+    System.out.println();
+    System.out.println(stats.toString());
+
+    if (indexCache != null) {
+      System.out.println();
+      print("index", indexCache.getStats());
+      print("data", dataCache.getStats());
+      indexCache.shutdown();
+      dataCache.shutdown();
+    }
   }
 
-  private static void print(CacheStats stats) {
-    System.out
-        .println(stats.getRequestCount() + " " + stats.getHitCount() + " " + stats.getMissCount());
+  private static void print(String name, CacheStats stats) {
+    System.out.printf("%6s cache stats, request:%,9d  hit ratio:%,6.2f  miss ratio:%,6.2f \n", name,
+        stats.getRequestCount(), stats.getHitRatio(), stats.getMissRatio());
 
   }
 
-  private static void randomseeks(Configuration conf, FileSystem fs, AccumuloConfiguration acuconf,
+  private static long randomseeks(Configuration conf, FileSystem fs, AccumuloConfiguration acuconf,
       String file, LruBlockCache dataCache, LruBlockCache indexCache) throws IOException {
     Stopwatch sw = new Stopwatch();
 
@@ -101,7 +117,9 @@ public class RandomSeekTest {
 
     reader.close();
 
-    System.out.println(sw.elapsed(TimeUnit.MILLISECONDS));
+    long t = sw.elapsed(TimeUnit.MILLISECONDS);
+    System.out.println(t);
+    return t;
   }
 
   private static void write(Configuration conf, FileSystem fs, AccumuloConfiguration acuconf,
