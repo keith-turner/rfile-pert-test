@@ -1,10 +1,13 @@
 package rfpt;
 
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Properties;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
 
@@ -52,8 +55,8 @@ public class RandomSeekTest {
     @Parameter(names = {"--cacheSize"}, description = "Data block size")
     public String dataCacheSize = "500M";
 
-    @Parameter(names = {"--requery"}, description = "Percentage of time that a recent query will be redone instead of a new random query")
-    public int requeryPercentage = 33;
+    @Parameter(names = {"--popular"}, description = "The size of the set of popular keys")
+    public int popularSize = 10_000;
 
     @Parameter(names = {"--rows"}, description = "Number of rows")
     public int numRows = 100_000;
@@ -63,10 +66,10 @@ public class RandomSeekTest {
 
     @Parameter(names = {"--preScan"}, description = "Prescan all data, will load it in cache if it all fits")
     public boolean preScan = false;
-  }
 
-  private static int[] requeryRows;
-  private static int[] requeryCols;
+    @Parameter(names = {"--properties"}, description = "Properties to set")
+    public String propsFile = null;
+  }
 
   private static long parseSize(String size){
     if(size.endsWith("K")) {
@@ -94,8 +97,14 @@ public class RandomSeekTest {
 
    Map<String, String> props = new HashMap<>();
 
+   if(opts.propsFile != null) {
+     Properties cfg = new Properties();
+     try(FileInputStream fis = new FileInputStream(new File(opts.propsFile))){
+       cfg.load(fis);
+     }
+     cfg.forEach((k,v) -> props.put(k.toString(), v.toString()));
+   }
 
-   props.put("tserver.cache.factory.class", "accumulo.ohc.OhcCacheManager");
    if(opts.dataBlockSize != null){
      props.put("table.file.compress.blocksize", opts.dataBlockSize);
    }
@@ -105,13 +114,13 @@ public class RandomSeekTest {
    }
 
 
-   String file = String.format("/tmp/test_%d_%d_%s_%s.rf", opts.numRows, opts.numCols, opts.idxBlockSize, opts.dataBlockSize);
+   String file = String.format("test_%d_%d_%s_%s.rf", opts.numRows, opts.numCols, opts.idxBlockSize, opts.dataBlockSize);
 
     if (!fs.exists(new Path(file))) {
       write(conf, fs, props, file, opts.numRows, opts.numCols);
     }
 
-    PrintInfo.main(new String[]{"file://"+file});
+    PrintInfo.main(new String[]{file});
 
     ScannerOptions builder = RFile.newScanner().from(file).withFileSystem(fs).withoutSystemIterators();
     if(!opts.noCache) {
@@ -120,36 +129,64 @@ public class RandomSeekTest {
     Scanner scanner = builder.build();
 
     if(opts.preScan){
-      scanner.forEach(e -> {});
+      int onePercent = Math.max(opts.numRows * opts.numCols / 100, 1);
+      int count = 0;
+      for (Entry<Key,Value> entry : scanner) {
+        count++;
+        if(count % onePercent == 0) {
+          System.out.printf("Prescanned %,d\n", count);
+        }
+      }
     }
 
-    int numRequery = 10_000;
-    requeryRows = new int[numRequery];
-    requeryCols = new int[numRequery];
+    int[] popularRows = new int[opts.popularSize];
+    int[] popularCols = new int[opts.popularSize];
 
     Random rand = new Random();
-    for(int i = 0; i < numRequery; i++){
-      requeryRows[i] = rand.nextInt(opts.numRows);
-      requeryCols[i] = rand.nextInt(opts.numCols);
-      seek(scanner, requeryRows[i], requeryCols[i]);
+    for(int i = 0; i < opts.popularSize; i++){
+      popularRows[i] = rand.nextInt(opts.numRows);
+      popularCols[i] = rand.nextInt(opts.numCols);
     }
 
     DescriptiveStatistics stats = new DescriptiveStatistics();
+    DescriptiveStatistics popularStats = new DescriptiveStatistics();
+
     for(int i = 0; i< opts.iterations; i++) {
-      stats.addValue(randomseeks(scanner, opts.numRows, opts.numCols, opts.requeryPercentage));
+      popularStats.addValue(popularseeks(scanner, popularRows, popularCols));
+      stats.addValue(randomseeks(scanner, opts.numRows, opts.numCols));
     }
 
     scanner.close();
 
     System.out.println();
+    System.out.println(popularStats.toString());
     System.out.println(stats.toString());
   }
 
 
 
-  private static long randomseeks(Scanner scanner, int numRows, int numCols, int requeryPercent) throws IOException {
+  private static double popularseeks(Scanner scanner, int[] popularRows, int[] popularCols) {
+
     Stopwatch sw = new Stopwatch();
 
+    Random rand = new Random();
+
+    sw.start();
+
+    for (int num = 0; num < 1000; num++) {
+      int i = rand.nextInt(popularRows.length);
+      seek(scanner, popularRows[i], popularCols[i]);
+    }
+
+    sw.stop();
+
+    long t = sw.elapsed(TimeUnit.MILLISECONDS);
+    System.out.println("popular    : "+t);
+    return t;
+  }
+
+  private static long randomseeks(Scanner scanner, int numRows, int numCols) throws IOException {
+    Stopwatch sw = new Stopwatch();
 
     Random rand = new Random();
 
@@ -158,16 +195,8 @@ public class RandomSeekTest {
     for (int num = 0; num < 1000; num++) {
 
       int r,c;
-
-      if(num > 0 && rand.nextInt(100) < requeryPercent){
-        //sometimes requery a recently queried row/col
-        int i = rand.nextInt(requeryRows.length);
-        r = requeryRows[i];
-        c = requeryCols[i];
-      } else {
-        r = rand.nextInt(numRows);
-        c = rand.nextInt(numCols);
-      }
+      r = rand.nextInt(numRows);
+      c = rand.nextInt(numCols);
 
       seek(scanner, r, c);
     }
@@ -175,7 +204,7 @@ public class RandomSeekTest {
     sw.stop();
 
     long t = sw.elapsed(TimeUnit.MILLISECONDS);
-    System.out.println(t);
+    System.out.println("everything : "+t);
     return t;
   }
 

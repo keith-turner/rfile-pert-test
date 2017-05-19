@@ -4,7 +4,7 @@
   <artifactId>accumulo-rfile-perf-test</artifactId>
   <version>0.0.1-SNAPSHOT</version>
   <properties>
-    <accumulo.version>1.8.0</accumulo.version>
+    <accumulo.version>2.0.0-SNAPSHOT</accumulo.version>
   </properties>
   <build>
     <plugins>
