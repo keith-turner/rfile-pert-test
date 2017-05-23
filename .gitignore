@@ -6,3 +6,5 @@ logs
 *.iml
 .idea
 .DS_Store
+*.rf
+*.rf.crc
