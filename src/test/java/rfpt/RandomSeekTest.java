@@ -80,8 +80,8 @@ public class RandomSeekTest {
   @Test
   public void testBlockCacheRandomSeekSmallOnHeap() throws Exception {
 	  
-	  idxCacheSize = Long.toString(parseSize("64M"));
-	  dataCacheSize = Long.toString(parseSize("64M"));
+	  idxCacheSize = Long.toString(parseSize("4M"));
+	  dataCacheSize = Long.toString(parseSize("4M"));
 	  
 	  final List<Class<? extends BlockCacheManager>> managers = new ArrayList<>();
 	  FastClasspathScanner cpScanner = new FastClasspathScanner().matchSubclassesOf(BlockCacheManager.class, new SubclassMatchProcessor<BlockCacheManager>() {
@@ -104,6 +104,7 @@ public class RandomSeekTest {
 			conf.set("table.file.compress.blocksize.index", idxBlockSize);
 			conf.set("general.custom.cache.block.ohc.data.off-heap.size", Long.toString(parseSize("10G")));
 			conf.set("general.custom.cache.block.ohc.index.off-heap.size", Long.toString(parseSize("10G")));
+			conf.set("general.custom.cache.block.ohc.summary.off-heap.size", Long.toString(parseSize("24M")));
 
 			props = new HashMap<>();
 			conf.forEach(e -> { props.put(e.getKey(), e.getValue());});
@@ -182,6 +183,7 @@ public class RandomSeekTest {
 			conf.set("table.file.compress.blocksize.index", idxBlockSize);
 			conf.set("general.custom.cache.block.ohc.data.off-heap.size", Long.toString(parseSize("10G")));
 			conf.set("general.custom.cache.block.ohc.index.off-heap.size", Long.toString(parseSize("10G")));
+			conf.set("general.custom.cache.block.ohc.summary.off-heap.size", Long.toString(parseSize("24M")));
 
 			props = new HashMap<>();
 			conf.forEach(e -> { props.put(e.getKey(), e.getValue());});
