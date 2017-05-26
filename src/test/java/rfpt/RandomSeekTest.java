@@ -34,10 +34,14 @@ import org.apache.hadoop.io.Text;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.google.common.base.Stopwatch;
 
 public class RandomSeekTest {
+	
+  private static final Logger LOG = LoggerFactory.getLogger(RandomSeekTest.class);
   
   private static final byte[] E = new byte[] {};
   private static final byte[] FAM = "pinky".getBytes();
@@ -74,13 +78,16 @@ public class RandomSeekTest {
   }
     
   @Test
-  public void testBlockCacheRandomSeek() throws Exception {
+  public void testBlockCacheRandomSeekSmallOnHeap() throws Exception {
+	  
+	  idxCacheSize = Long.toString(parseSize("4M"));
+	  dataCacheSize = Long.toString(parseSize("4M"));
 	  
 	  final List<Class<? extends BlockCacheManager>> managers = new ArrayList<>();
 	  FastClasspathScanner cpScanner = new FastClasspathScanner().matchSubclassesOf(BlockCacheManager.class, new SubclassMatchProcessor<BlockCacheManager>() {
 		  @Override
 		  public void processMatch(Class<? extends BlockCacheManager> clazz) {
-			  System.out.println("Found class: " + clazz);
+			  LOG.debug("Found class: " + clazz);
 			  managers.add(clazz);
 		  }
 	  });
@@ -95,10 +102,9 @@ public class RandomSeekTest {
 			conf.set("tserver.default.blocksize", dataBlockSize);
 			conf.set("table.file.compress.blocksize", dataBlockSize);
 			conf.set("table.file.compress.blocksize.index", idxBlockSize);
-			conf.set("general.custom.cache.block.tiered.expiration.time", "1");
-			conf.set("general.custom.cache.block.tiered.expiration.time_units", "HOUR");
-			conf.set("general.custom.cache.block.tiered.expiration.off-heap.max.size", "1G");
-			conf.set("general.custom.cache.block.tiered.expiration.off-heap.block.size", "16K");
+			conf.set("general.custom.cache.block.ohc.data.off-heap.size", Long.toString(parseSize("10G")));
+			conf.set("general.custom.cache.block.ohc.index.off-heap.size", Long.toString(parseSize("10G")));
+			conf.set("general.custom.cache.block.ohc.summary.off-heap.size", Long.toString(parseSize("24M")));
 
 			props = new HashMap<>();
 			conf.forEach(e -> { props.put(e.getKey(), e.getValue());});
@@ -110,9 +116,9 @@ public class RandomSeekTest {
 		    }
 		    PrintInfo.main(new String[]{fileName});
 		  
-		  System.out.println("--------------------------------------------------------------------------------");
-		  System.out.println(manager.getSimpleName());
-		  System.out.println("--------------------------------------------------------------------------------");
+		  LOG.info("--------------------------------------------------------------------------------");
+		  LOG.info(manager.getSimpleName());
+		  LOG.info("--------------------------------------------------------------------------------");
 		  
 		  ScannerOptions builder = RFile.newScanner().from(fileName).withFileSystem(fs).withoutSystemIterators();
 		  if(!noCache) {
@@ -125,7 +131,7 @@ public class RandomSeekTest {
 			  for (@SuppressWarnings("unused") Entry<Key,Value> entry : scanner) {
 				  count++;
 				  if(count % onePercent == 0) {
-					  System.out.printf("Prescanned %,d\n", count);
+					  LOG.debug("Prescanned %,d\n", count);
 				  }
 			  }
 		  }
@@ -148,12 +154,88 @@ public class RandomSeekTest {
 		  
 		  scanner.close();
 		  
-		  System.out.println();
-		  System.out.println(popularStats.toString());
-		  System.out.println(stats.toString());
+		  LOG.info("Popular Stats: {}", popularStats);
+		  LOG.info("Random Stats: {}", stats);
 	  }
+  }
+
+  @Test
+  public void testBlockCacheRandomSeek() throws Exception {
 	  
-	  
+	  final List<Class<? extends BlockCacheManager>> managers = new ArrayList<>();
+	  FastClasspathScanner cpScanner = new FastClasspathScanner().matchSubclassesOf(BlockCacheManager.class, new SubclassMatchProcessor<BlockCacheManager>() {
+		  @Override
+		  public void processMatch(Class<? extends BlockCacheManager> clazz) {
+			  LOG.debug("Found class: " + clazz);
+			  managers.add(clazz);
+		  }
+	  });
+	  cpScanner.scan();
+
+	  Assert.assertNotEquals(0, managers.size());
+	  for (Class<? extends BlockCacheManager> manager : managers) {
+			Configuration conf = new Configuration();
+			conf.set("tserver.cache.manager.class", manager.getName());
+			conf.set("tserver.cache.data.size", dataCacheSize);
+			conf.set("tserver.cache.index.size", idxCacheSize);
+			conf.set("tserver.default.blocksize", dataBlockSize);
+			conf.set("table.file.compress.blocksize", dataBlockSize);
+			conf.set("table.file.compress.blocksize.index", idxBlockSize);
+			conf.set("general.custom.cache.block.ohc.data.off-heap.size", Long.toString(parseSize("10G")));
+			conf.set("general.custom.cache.block.ohc.index.off-heap.size", Long.toString(parseSize("10G")));
+			conf.set("general.custom.cache.block.ohc.summary.off-heap.size", Long.toString(parseSize("24M")));
+
+			props = new HashMap<>();
+			conf.forEach(e -> { props.put(e.getKey(), e.getValue());});
+			
+		    fs = FileSystem.getLocal(conf);
+		    fileName = String.format("test_%d_%d_%s_%s.rf", numRows, numCols, idxBlockSize, dataBlockSize);
+		    if (!fs.exists(new Path(fileName))) {
+		      write(conf, fs, props, fileName, numRows, numCols);
+		    }
+		    PrintInfo.main(new String[]{fileName});
+		  
+		  LOG.info("--------------------------------------------------------------------------------");
+		  LOG.info(manager.getSimpleName());
+		  LOG.info("--------------------------------------------------------------------------------");
+		  
+		  ScannerOptions builder = RFile.newScanner().from(fileName).withFileSystem(fs).withoutSystemIterators();
+		  if(!noCache) {
+			  builder = builder.withIndexCache(parseSize(idxCacheSize)).withDataCache(parseSize(dataCacheSize)).withTableProperties(props);
+		  }
+		  Scanner scanner = builder.build();
+		  if(preScan){
+			  int onePercent = Math.max(numRows * numCols / 100, 1);
+			  int count = 0;
+			  for (@SuppressWarnings("unused") Entry<Key,Value> entry : scanner) {
+				  count++;
+				  if(count % onePercent == 0) {
+					  LOG.debug("Prescanned %,d\n", count);
+				  }
+			  }
+		  }
+		  int[] popularRows = new int[popularSize];
+		  int[] popularCols = new int[popularSize];
+		  
+		  Random rand = new Random();
+		  for(int i = 0; i < popularSize; i++){
+			  popularRows[i] = rand.nextInt(numRows);
+			  popularCols[i] = rand.nextInt(numCols);
+		  }
+		  
+		  DescriptiveStatistics stats = new DescriptiveStatistics();
+		  DescriptiveStatistics popularStats = new DescriptiveStatistics();
+		  
+		  for(int i = 0; i< iterations; i++) {
+			  popularStats.addValue(popularseeks(scanner, popularRows, popularCols));
+			  stats.addValue(randomseeks(scanner, numRows, numCols));
+		  }
+		  
+		  scanner.close();
+		  
+		  LOG.info("Popular Stats: {}", popularStats);
+		  LOG.info("Random Stats: {}", stats);
+	  }
   }
 
   private static long parseSize(String size){
@@ -188,7 +270,7 @@ public class RandomSeekTest {
     sw.stop();
 
     long t = sw.elapsed(TimeUnit.MILLISECONDS);
-    System.out.println("popular    : "+t);
+    LOG.debug("popular    : "+t);
     return t;
   }
 
@@ -211,7 +293,7 @@ public class RandomSeekTest {
     sw.stop();
 
     long t = sw.elapsed(TimeUnit.MILLISECONDS);
-    System.out.println("everything : "+t);
+    LOG.debug("everything : "+t);
     return t;
   }
 
